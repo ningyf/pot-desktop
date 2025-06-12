@@ -1,0 +1,8 @@
+{
+  "common": {
+    "copy": "Copy",
+    "replace": "Replace",
+    "replace_success": "Text replaced successfully",
+    "replace_failed": "Failed to replace text"
+  }
+}

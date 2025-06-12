@@ -40,16 +40,22 @@ pub static APP: OnceCell<tauri::AppHandle> = OnceCell::new();
 
 // Text to be translated
 pub struct StringWrapper(pub Mutex<String>);
+pub struct SelectionInfoWrapper(pub Mutex<Option<SelectionInfo>>);
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SelectionInfo {
+    pub window_id: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub text: String,
+}
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, cwd| {
-            Notification::new(&app.config().tauri.bundle.identifier)
-                .title("The program is already running. Please do not start it again!")
-                .body(cwd)
-                .icon("pot")
-                .show()
-                .unwrap();
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            println!("{}, {argv:?}, {cwd}", app.package_info().name);
         }))
         .plugin(
             tauri_plugin_log::Builder::default()
@@ -58,7 +64,7 @@ fn main() {
         )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![]),
+            Some(vec!["--flag1", "--flag2"]),
         ))
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -85,6 +91,10 @@ fn main() {
                 config_window();
             }
             app.manage(StringWrapper(Mutex::new("".to_string())));
+            app.manage(SelectionInfoWrapper(Mutex::new(None)));
+            app.manage(ClipboardMonitorEnableWrapper(Mutex::new(
+                "false".to_string(),
+            )));
             // Update Tray Menu
             update_tray(app.app_handle(), "".to_string(), "".to_string());
             // Start http server
@@ -101,7 +111,10 @@ fn main() {
             }
             match get("proxy_enable") {
                 Some(v) => {
-                    if v.as_bool().unwrap() && get("proxy_host").map_or(false, |host| !host.as_str().unwrap().is_empty()) {
+                    if v.as_bool().unwrap()
+                        && get("proxy_host")
+                            .map_or(false, |host| !host.as_str().unwrap().is_empty())
+                    {
                         let _ = set_proxy();
                     }
                 }
@@ -147,7 +160,8 @@ fn main() {
             local,
             install_plugin,
             font_list,
-            aliyun
+            aliyun,
+            replace_selected_text
         ])
         .on_system_tray_event(tray_event_handler)
         .build(tauri::generate_context!())

@@ -1,15 +1,18 @@
 use crate::config::get;
 use crate::config::StoreWrapper;
 use crate::error::Error;
+use crate::SelectionInfoWrapper;
 use crate::StringWrapper;
 use crate::APP;
 use log::{error, info};
 use serde_json::{json, Value};
 use std::io::Read;
+use std::io::Write;
 use tauri::Manager;
 
 #[tauri::command]
 pub fn get_text(state: tauri::State<StringWrapper>) -> String {
+    info!("Get text: {:?}", state.0.lock().unwrap());
     return state.0.lock().unwrap().to_string();
 }
 
@@ -224,4 +227,181 @@ pub fn open_devtools(window: tauri::Window) {
     } else {
         window.close_devtools();
     }
+}
+
+#[tauri::command]
+pub fn replace_selected_text(new_text: String) -> Result<(), String> {
+    info!("Replace selected text: {}", new_text);
+
+    let app_handle = APP.get().unwrap();
+    info!("Got app handle");
+
+    let selection_state = app_handle.state::<SelectionInfoWrapper>();
+    info!("Got selection state");
+
+    let selection_info = selection_state.0.lock().unwrap();
+    info!("Got selection info lock");
+
+    let info = match &*selection_info {
+        Some(info) => {
+            info!("Found selection info: {}", new_text);
+            info
+        }
+        None => {
+            info!("No selection info available");
+            return Err("No selection info available".to_string());
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        use std::process::Stdio;
+
+        // 首先将新文本复制到剪贴板
+        let echo_cmd = Command::new("echo")
+            .arg(&new_text)
+            .output()
+            .map_err(|e| e.to_string())?;
+
+        let mut pbcopy_cmd = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+
+        let mut stdin = pbcopy_cmd.stdin.take().unwrap();
+        stdin
+            .write_all(&new_text.as_bytes())
+            .map_err(|e| e.to_string())?;
+        drop(stdin);
+
+        pbcopy_cmd.wait().map_err(|e| e.to_string())?;
+
+        // 构建 AppleScript 命令
+        let script = format!(
+            r#"
+            tell application "System Events"
+                set frontProcess to first process where it is frontmost
+                set frontApp to name of frontProcess
+                log "Front app: " & frontApp
+                tell application frontApp to activate
+                delay 0.5
+                tell process frontApp
+                    set frontmost to true
+                    delay 0.2
+                    keystroke "a" using {{command down}}
+                    delay 0.2
+                    keystroke "v" using {{command down}}
+                end tell
+            end tell
+            "#,
+        );
+
+        info!("Executing AppleScript: {}", script);
+
+        // 执行 AppleScript
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()
+            .map_err(|e| {
+                info!("AppleScript execution failed: {}", e);
+                e.to_string()
+            })?;
+
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr).to_string();
+            info!("AppleScript error: {}", error);
+            return Err(error);
+        }
+
+        info!("AppleScript executed successfully");
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_A, VK_CONTROL,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowA, SendInput, SetForegroundWindow,
+        };
+
+        info!("Looking for window: {}", info.window_id);
+        if let Ok(hwnd) = FindWindowA(None, &info.window_id) {
+            info!("Found window, setting foreground");
+            unsafe {
+                SetForegroundWindow(hwnd);
+                // 模拟 Ctrl+A
+                let mut inputs = [
+                    INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: VK_CONTROL,
+                                wScan: 0,
+                                dwFlags: 0,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
+                    },
+                    INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: VK_A,
+                                wScan: 0,
+                                dwFlags: 0,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
+                    },
+                ];
+                info!("Sending Ctrl+A");
+                SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+
+                // 释放按键
+                inputs[0].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                inputs[1].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+
+                // 输入新文本
+                info!("Sending new text: {}", new_text);
+                for c in new_text.chars() {
+                    let mut input = INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: 0,
+                                wScan: c as u16,
+                                dwFlags: 0,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
+                    };
+                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                    input.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+                }
+            }
+            info!("Text replacement completed");
+        } else {
+            info!("Window not found");
+            return Err("Window not found".to_string());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        info!("Linux implementation not available");
+        // Linux 实现
+        // 需要根据具体的窗口系统（X11/Wayland）来实现
+    }
+
+    info!("Replace selected text completed successfully");
+    Ok(())
 }

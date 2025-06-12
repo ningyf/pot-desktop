@@ -10,6 +10,8 @@ import {
     DropdownMenu,
     DropdownTrigger,
     Tooltip,
+    Spacer,
+    Chip,
 } from '@nextui-org/react';
 import { BiCollapseVertical, BiExpandVertical } from 'react-icons/bi';
 import { BaseDirectory, readTextFile } from '@tauri-apps/api/fs';
@@ -30,6 +32,12 @@ import { useAtomValue } from 'jotai';
 import { nanoid } from 'nanoid';
 import { useSpring, animated } from '@react-spring/web';
 import useMeasure from 'react-use-measure';
+import { listen } from '@tauri-apps/api/event';
+import { MdSmartButton } from 'react-icons/md';
+import { HiTranslate } from 'react-icons/hi';
+import { LuDelete } from 'react-icons/lu';
+import { invoke } from '@tauri-apps/api';
+import { atom, useAtom } from 'jotai';
 
 import * as builtinCollectionServices from '../../../../services/collection';
 import { sourceLanguageAtom, targetLanguageAtom } from '../LanguageArea';
@@ -372,6 +380,27 @@ export default function TargetArea(props) {
         from: { height: 0 },
         to: { height: hide ? 0 : bounds.height },
     });
+
+    const handleReplace = async () => {
+        console.log('result', result);
+        try {
+            if (typeof result !== 'string' || result === '') {
+                toast.error(t('common.replace_failed'), {
+                    style: toastStyle,
+                });
+                return;
+            }
+            await invoke('replace_selected_text', { newText: result });
+            toast.success(t('common.replace_success'), {
+                style: toastStyle,
+            });
+        } catch (error) {
+            toast.error(t('common.replace_failed'), {
+                style: toastStyle,
+            });
+            console.error('Replace failed:', error);
+        }
+    };
 
     return (
         <Card
@@ -871,6 +900,14 @@ export default function TargetArea(props) {
                                         </Button>
                                     );
                                 })}
+                            <Tooltip content={t('common.replace')}>
+                                <Button
+                                    isIconOnly
+                                    onPress={handleReplace}
+                                >
+                                    <MdSmartButton />
+                                </Button>
+                            </Tooltip>
                         </ButtonGroup>
                     </CardFooter>
                 </div>

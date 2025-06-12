@@ -2,6 +2,8 @@ use std::fs;
 
 use crate::config::get;
 use crate::config::set;
+use crate::SelectionInfo;
+use crate::SelectionInfoWrapper;
 use crate::StringWrapper;
 use crate::APP;
 use dirs::cache_dir;
@@ -232,10 +234,26 @@ pub fn selection_translate() {
         // Write into State
         let state: tauri::State<StringWrapper> = app_handle.state();
         state.0.lock().unwrap().replace_range(.., &text);
-    }
 
-    let window = translate_window();
-    window.emit("new_text", text).unwrap();
+        // Create window first
+        let window = translate_window();
+        let window_id = window.label().to_string();
+
+        // Save selection info
+        let selection_state: tauri::State<SelectionInfoWrapper> = app_handle.state();
+        let mut selection_info = selection_state.0.lock().unwrap();
+
+        *selection_info = Some(SelectionInfo {
+            window_id,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            text: text.clone(),
+        });
+
+        window.emit("new_text", text).unwrap();
+    }
 }
 
 pub fn input_translate() {
