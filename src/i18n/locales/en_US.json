@@ -7,7 +7,10 @@
             "write_clipboard": "Write to Clipboard",
             "plugin": "Plugin",
             "coming": "Coming soon…",
-            "clear": "Clear"
+            "clear": "Clear",
+            "replace": "Replace",
+            "replace_success": "Replace Success",
+            "replace_failed": "Replace Failed"
         },
         "languages": {
             "auto": "Auto Detect",

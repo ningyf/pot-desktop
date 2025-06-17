@@ -7,7 +7,10 @@
             "write_clipboard": "寫入剪貼簿",
             "plugin": "外掛程式",
             "coming": "即將推出…",
-            "clear": "清除"
+            "clear": "清除",
+            "replace": "替換",
+            "replace_success": "替換成功",
+            "replace_failed": "替換失敗"
         },
         "languages": {
             "auto": "自動偵測",

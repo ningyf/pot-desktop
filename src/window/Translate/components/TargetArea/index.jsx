@@ -27,6 +27,7 @@ import { MdContentCopy } from 'react-icons/md';
 import { useTranslation } from 'react-i18next';
 import Database from 'tauri-plugin-sql-api';
 import { GiCycle } from 'react-icons/gi';
+import { LuReplace } from 'react-icons/lu';
 import { useTheme } from 'next-themes';
 import { useAtomValue } from 'jotai';
 import { nanoid } from 'nanoid';
@@ -902,10 +903,12 @@ export default function TargetArea(props) {
                                 })}
                             <Tooltip content={t('common.replace')}>
                                 <Button
+                                    variant='light'
+                                    size='sm'
                                     isIconOnly
                                     onPress={handleReplace}
                                 >
-                                    <MdSmartButton />
+                                    <LuReplace className='text-[16px]' />
                                 </Button>
                             </Tooltip>
                         </ButtonGroup>

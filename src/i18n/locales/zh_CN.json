@@ -7,7 +7,10 @@
             "write_clipboard": "写入剪贴板",
             "plugin": "插件",
             "coming": "敬请期待…",
-            "clear": "清空"
+            "clear": "清空",
+            "replace": "替换",
+            "replace_success": "替换成功",
+            "replace_failed": "替换失败"
         },
         "languages": {
             "auto": "自动检测",
