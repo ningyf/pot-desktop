@@ -1,12 +1,9 @@
-use std::fs;
-
 use crate::config::get;
 use crate::config::set;
 use crate::SelectionInfo;
 use crate::SelectionInfoWrapper;
 use crate::StringWrapper;
 use crate::APP;
-use dirs::cache_dir;
 use log::{info, warn};
 use tauri::Manager;
 use tauri::Monitor;
@@ -235,23 +232,43 @@ pub fn selection_translate() {
         let state: tauri::State<StringWrapper> = app_handle.state();
         state.0.lock().unwrap().replace_range(.., &text);
 
-        // Create window first
-        let window = translate_window();
-        let window_id = window.label().to_string();
-
-        // Save selection info
+        // Save selection info before creating translation window
         let selection_state: tauri::State<SelectionInfoWrapper> = app_handle.state();
         let mut selection_info = selection_state.0.lock().unwrap();
 
-        *selection_info = Some(SelectionInfo {
-            window_id,
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-            text: text.clone(),
-        });
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+            use windows::Win32::UI::WindowsAndMessaging::GetWindowTextLengthA;
+            use windows::Win32::UI::WindowsAndMessaging::GetWindowTextA;
 
+            // 获取选中文本时的窗口
+            let hwnd = unsafe { GetForegroundWindow() };
+            if !hwnd.is_invalid() {
+                // 获取窗口标题长度
+                let len = unsafe { GetWindowTextLengthA(hwnd) };
+                if len > 0 {
+                    // 获取窗口标题
+                    let mut buffer = vec![0u8; (len + 1) as usize];
+                    let copied = unsafe { GetWindowTextA(hwnd, &mut buffer) };
+                    if copied > 0 {
+                        let window_title = String::from_utf8_lossy(&buffer[..copied as usize]).to_string();
+                        
+                        *selection_info = Some(SelectionInfo {
+                            window_id: window_title,
+                            x: 0,
+                            y: 0,
+                            width: 0,
+                            height: 0,
+                            text: text.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Create window after saving selection info
+        let window = translate_window();
         window.emit("new_text", text).unwrap();
     }
 }

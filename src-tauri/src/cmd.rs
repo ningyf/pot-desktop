@@ -7,8 +7,19 @@ use crate::APP;
 use log::{error, info};
 use serde_json::{json, Value};
 use std::io::Read;
-use std::io::Write;
 use tauri::Manager;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, KEYBD_EVENT_FLAGS,
+    VK_CONTROL, VK_V, VK_DELETE,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+     SetForegroundWindow, GetForegroundWindow,
+    EnumWindows, 
+    BringWindowToTop, IsWindow,
+};
+use arboard::Clipboard;
+use std::time::{Duration, Instant};
 
 #[tauri::command]
 pub fn get_text(state: tauri::State<StringWrapper>) -> String {
@@ -222,11 +233,20 @@ pub fn font_list() -> Result<Vec<String>, Error> {
 
 #[tauri::command]
 pub fn open_devtools(window: tauri::Window) {
-    if !window.is_devtools_open() {
-        window.open_devtools();
+    use tauri::Manager;
+    
+    if let Some(devtools) = window.get_window("__tauri_devtools") {
+        devtools.close().unwrap();
     } else {
-        window.close_devtools();
+        #[cfg(debug_assertions)]
+        window.open_devtools();
     }
+}
+
+#[tauri::command]
+pub fn is_devtools_open(window: tauri::Window) -> bool {
+    use tauri::Manager;
+    window.get_window("__tauri_devtools").is_some()
 }
 
 #[tauri::command]
@@ -253,87 +273,104 @@ pub fn replace_selected_text(new_text: String) -> Result<(), String> {
         }
     };
 
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        use std::process::Stdio;
-
-        // 首先将新文本复制到剪贴板
-        let echo_cmd = Command::new("echo")
-            .arg(&new_text)
-            .output()
-            .map_err(|e| e.to_string())?;
-
-        let mut pbcopy_cmd = Command::new("pbcopy")
-            .stdin(Stdio::piped())
-            .spawn()
-            .map_err(|e| e.to_string())?;
-
-        let mut stdin = pbcopy_cmd.stdin.take().unwrap();
-        stdin
-            .write_all(&new_text.as_bytes())
-            .map_err(|e| e.to_string())?;
-        drop(stdin);
-
-        pbcopy_cmd.wait().map_err(|e| e.to_string())?;
-
-        // 构建 AppleScript 命令
-        let script = format!(
-            r#"
-            tell application "System Events"
-                set frontProcess to first process where it is frontmost
-                set frontApp to name of frontProcess
-                log "Front app: " & frontApp
-                tell application frontApp to activate
-                delay 0.5
-                tell process frontApp
-                    set frontmost to true
-                    delay 0.2
-                    keystroke "a" using {{command down}}
-                    delay 0.2
-                    keystroke "v" using {{command down}}
-                end tell
-            end tell
-            "#,
-        );
-
-        info!("Executing AppleScript: {}", script);
-
-        // 执行 AppleScript
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()
-            .map_err(|e| {
-                info!("AppleScript execution failed: {}", e);
-                e.to_string()
-            })?;
-
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr).to_string();
-            info!("AppleScript error: {}", error);
-            return Err(error);
-        }
-
-        info!("AppleScript executed successfully");
-    }
-
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_A, VK_CONTROL,
-        };
-        use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowA, SendInput, SetForegroundWindow,
-        };
-
+        info!("Replace selected windows");
+        
         info!("Looking for window: {}", info.window_id);
-        if let Ok(hwnd) = FindWindowA(None, &info.window_id) {
-            info!("Found window, setting foreground");
+        
+        let mut target_data: (Option<HWND>, String) = (None, info.window_id.clone());
+        unsafe {
+            info!("Starting window enumeration");
+            let result = EnumWindows(
+                Some(enum_window_callback), 
+                windows::Win32::Foundation::LPARAM(&mut target_data as *mut _ as isize)
+            );
+            info!("EnumWindows completed with result: {}", result.is_ok());
+            
+            if target_data.0.is_none() {
+                info!("No matching window found after enumeration");
+            }
+        }
+        
+        if let Some(hwnd) = target_data.0 {
+            info!("Found window with HWND: {:?}", hwnd);
+            
             unsafe {
-                SetForegroundWindow(hwnd);
-                // 模拟 Ctrl+A
+                // 验证窗口是否有效
+                if !IsWindow(hwnd).as_bool() {
+                    error!("Invalid window handle");
+                    return Err("Window is no longer valid".to_string());
+                }
+                info!("Window handle is valid");
+
+                // 尝试设置剪贴板
+                info!("Setting clipboard content");
+                match Clipboard::new().and_then(|mut cb| cb.set_text(&new_text)) {
+                    Ok(_) => info!("Clipboard set successfully"),
+                    Err(e) => {
+                        error!("Failed to set clipboard: {}", e);
+                        return Err("Failed to set clipboard".to_string());
+                    }
+                }
+
+                // 尝试激活窗口
+                info!("Attempting to activate window");
+                let bring_result = BringWindowToTop(hwnd);
+                info!("BringWindowToTop result: {}", bring_result.is_ok());
+                
+                if !SetForegroundWindow(hwnd).as_bool() {
+                    error!("Failed to set foreground window");
+                    return Err("Could not activate window".to_string());
+                }
+                info!("SetForegroundWindow succeeded");
+
+                // 等待窗口真正激活
+                let start = Instant::now();
+                let timeout = Duration::from_secs(2);
+                let mut activated = false;
+                while GetForegroundWindow() != hwnd {
+                    if start.elapsed() > timeout {
+                        error!("Timeout waiting for window activation");
+                        return Err("Window activation timeout".to_string());
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                    activated = true;
+                }
+                if activated {
+                    info!("Window activated after waiting");
+                } else {
+                    info!("Window was already active");
+                }
+
+                // 等待确保窗口完全响应
+                std::thread::sleep(Duration::from_millis(300));
+
+                // 发送Delete键
+                info!("Sending Delete key");
+                let mut delete_input = INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VK_DELETE,
+                            wScan: 0,
+                            dwFlags: KEYBD_EVENT_FLAGS(0),
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                };
+                let delete_result = SendInput(&[delete_input], std::mem::size_of::<INPUT>() as i32);
+                info!("Delete key down result: {}", delete_result);
+                
+                delete_input.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
+                let delete_up_result = SendInput(&[delete_input], std::mem::size_of::<INPUT>() as i32);
+                info!("Delete key up result: {}", delete_up_result);
+
+                std::thread::sleep(Duration::from_millis(100));
+
+                // 发送Ctrl+V
+                info!("Sending Ctrl+V");
                 let mut inputs = [
                     INPUT {
                         r#type: INPUT_KEYBOARD,
@@ -341,7 +378,7 @@ pub fn replace_selected_text(new_text: String) -> Result<(), String> {
                             ki: KEYBDINPUT {
                                 wVk: VK_CONTROL,
                                 wScan: 0,
-                                dwFlags: 0,
+                                dwFlags: KEYBD_EVENT_FLAGS(0),
                                 time: 0,
                                 dwExtraInfo: 0,
                             },
@@ -351,57 +388,79 @@ pub fn replace_selected_text(new_text: String) -> Result<(), String> {
                         r#type: INPUT_KEYBOARD,
                         Anonymous: INPUT_0 {
                             ki: KEYBDINPUT {
-                                wVk: VK_A,
+                                wVk: VK_V,
                                 wScan: 0,
-                                dwFlags: 0,
+                                dwFlags: KEYBD_EVENT_FLAGS(0),
                                 time: 0,
                                 dwExtraInfo: 0,
                             },
                         },
                     },
                 ];
-                info!("Sending Ctrl+A");
-                SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-
+                
+                let ctrl_v_result = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                info!("Ctrl+V down result: {}", ctrl_v_result);
+                
+                std::thread::sleep(Duration::from_millis(50));
+                
                 // 释放按键
                 inputs[0].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
                 inputs[1].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
-                SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-
-                // 输入新文本
-                info!("Sending new text: {}", new_text);
-                for c in new_text.chars() {
-                    let mut input = INPUT {
-                        r#type: INPUT_KEYBOARD,
-                        Anonymous: INPUT_0 {
-                            ki: KEYBDINPUT {
-                                wVk: 0,
-                                wScan: c as u16,
-                                dwFlags: 0,
-                                time: 0,
-                                dwExtraInfo: 0,
-                            },
-                        },
-                    };
-                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
-                    input.Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
-                    SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
-                }
+                let ctrl_v_up_result = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+                info!("Ctrl+V up result: {}", ctrl_v_up_result);
             }
             info!("Text replacement completed");
+            return Ok(());
         } else {
-            info!("Window not found");
+            error!("Window not found: {}", info.window_id);
             return Err("Window not found".to_string());
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "windows"))]
     {
-        info!("Linux implementation not available");
-        // Linux 实现
-        // 需要根据具体的窗口系统（X11/Wayland）来实现
+        return Err("Platform not supported".to_string());
     }
+}
 
-    info!("Replace selected text completed successfully");
-    Ok(())
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn enum_window_callback(hwnd: HWND, lparam: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::BOOL {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthA, GetWindowTextA};
+    use windows::Win32::Foundation::BOOL;
+    use log::{info};
+    
+    let target_data = lparam.0 as *mut (Option<HWND>, String);
+    let target_data = &mut *target_data;
+    let (target_hwnd, target_title) = target_data;
+    
+    // 获取窗口标题长度
+    let len = GetWindowTextLengthA(hwnd);
+    if len > 0 {
+        // 获取窗口标题
+        let mut buffer = vec![0u8; (len + 1) as usize];
+        let copied = GetWindowTextA(hwnd, &mut buffer);
+        if copied > 0 {
+            let window_title = String::from_utf8_lossy(&buffer[..copied as usize]).to_string();
+            let window_title = window_title.trim();
+            info!("Checking window: '{}'", window_title);
+            
+            // 提取固定部分（去掉最后的数字）
+            let window_base = window_title.split(" – ").next().unwrap_or(window_title);
+            let target_base = target_title.split(" – ").next().unwrap_or(&target_title);
+            
+            // 移除所有不可见字符
+            let window_base = window_base.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+            let target_base = target_base.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+            
+            info!("Comparing base titles: '{}' vs '{}'", window_base, target_base);
+            
+            // 检查窗口标题的固定部分是否匹配
+            if window_base == target_base {
+                info!("Found matching window: '{}'", window_title);
+                *target_hwnd = Some(hwnd);
+                return BOOL(0); // 停止枚举
+            }
+        }
+    }
+    BOOL(1) // 继续枚举
 }

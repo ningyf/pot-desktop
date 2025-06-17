@@ -21,7 +21,7 @@ use cmd::*;
 use config::*;
 use hotkey::*;
 use lang_detect::*;
-use log::info;
+use log::{info};
 use once_cell::sync::OnceCell;
 use screenshot::screenshot;
 use server::*;
@@ -54,9 +54,23 @@ pub struct SelectionInfo {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-            println!("{}, {argv:?}, {cwd}", app.package_info().name);
-        }))
+        // .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        //     info!("Single instance callback triggered");
+        //     match app {
+        //         Some(app) => {
+        //             info!("Single instance detected: {}, {argv:?}, {cwd}", app.package_info().name);
+        //             // 尝试激活已存在的窗口
+        //             if let Some(window) = app.get_window("main") {
+        //                 if let Err(e) = window.set_focus() {
+        //                     warn!("Failed to focus window: {}", e);
+        //                 }
+        //             }
+        //         }
+        //         None => {
+        //             warn!("Single instance detected but app handle is null");
+        //         }
+        //     }
+        // }))
         .plugin(
             tauri_plugin_log::Builder::default()
                 .targets([LogTarget::LogDir, LogTarget::Stdout])
@@ -151,6 +165,7 @@ fn main() {
             unset_proxy,
             run_binary,
             open_devtools,
+            is_devtools_open,
             register_shortcut_by_frontend,
             update_tray,
             updater_window,
@@ -161,7 +176,7 @@ fn main() {
             install_plugin,
             font_list,
             aliyun,
-            replace_selected_text
+            replace_selected_text,
         ])
         .on_system_tray_event(tray_event_handler)
         .build(tauri::generate_context!())
